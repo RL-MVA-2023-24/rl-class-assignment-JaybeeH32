@@ -17,14 +17,23 @@ env = TimeLimit(
 # Don't modify the methods names and signatures, but you can add methods.
 # ENJOY!
 class ProjectAgent:
-    def __init__(self, config) -> None:
+    def __init__(self) -> None:
         
+        config = {
+        'gamma': 0.99,
+        'iterations': 200,
+        'regressor': 'RF',
+        
+        'collecting_envs': 40,
+        'collecting_horizon': 200,
+        
+        }
         self.nb_actions = 4
         self.gamma = config['gamma'] if 'gamma' in config.keys() else 0.99
         self.iterations = config['iterations'] if 'iterations' in config.keys() else 200
         self.regressor = config['regressor'] if 'regressor' in config.keys() else 'RF'
         
-        self.nb_envs = config['collecting_ens'] if 'collecting_ens' in config.keys() else 20
+        self.nb_envs = config['collecting_envs'] if 'collecting_envs' in config.keys() else 20
         self.horizon = config['collecting_horizon'] if 'collecting_horizon' in config.keys() else 200
     
     def act(self, observation, use_random=False):
@@ -74,7 +83,7 @@ class ProjectAgent:
                 value = R + self.gamma * (1 - D) * max_Q2
             Q = self.get_regressor()
             Q.fit(SA, value)
-            print(f"Iteration {iter} - MSE loss: {self.evaluate_model(Q)}")
+            print(f"Iteration {iter} - MSE loss: {self.evaluate_model(Q):.2f}")
             Qfunctions.append(Q)
         self.Qfunctions = Qfunctions
     
@@ -91,7 +100,7 @@ class ProjectAgent:
         value = R + self.gamma * (1 - D) * max_Q2
         
         predict_value = Qfunction.predict(SA)
-        return mean_squared_error(value, predict_value)
+        return mean_squared_error(value, predict_value)/nb_samples
         
     
     def collect_samples(self, disable_tqdm=False, print_done_states=True):
@@ -134,16 +143,7 @@ class ProjectAgent:
 
 if __name__ == "__main__":
     
-    config = {
-        'gamma': 0.99,
-        'iterations': 200,
-        'regressor': 'RF',
-        
-        'collecting_envs': 20,
-        'collecting_horizon': 200,
-        
-    }
-    agent = ProjectAgent(config)
+    agent = ProjectAgent()
     
     agent.collect_samples()
     
