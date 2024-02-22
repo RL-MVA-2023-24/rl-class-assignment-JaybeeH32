@@ -24,7 +24,7 @@ class ProjectAgent:
         'iterations': 200,
         'regressor': 'RF',
         
-        'collecting_envs': 40,
+        'collecting_envs': 400,
         'collecting_horizon': 200,
         
         }
@@ -42,11 +42,11 @@ class ProjectAgent:
             return np.random.choice(np.arange(self.nb_actions))
         Q2 = np.zeros((1, self.nb_actions))
         for a2 in range(self.nb_actions):
-            A2 = a2 
-            S2A2 = np.append(observation, A2, axis=1)
+            A2 = np.array([a2]) 
+            S2A2 = np.append(observation, A2, axis=0).reshape(1, -1)
             Q2[:, a2] = self.Qfunctions[-1].predict(S2A2)
-        max_Q2 = np.max(Q2, axis=1)
-        return max_Q2
+        max_Q2 = np.argmax(Q2, axis=1)
+        return int(max_Q2)
 
     def save(self, path):
         with open(path, 'wb') as file:
@@ -59,7 +59,7 @@ class ProjectAgent:
         
     def get_regressor(self):
         if self.regressor == 'RF':
-            return RandomForestRegressor()
+            return RandomForestRegressor(n_estimators=150)
         elif self.regressor == 'GB':
             return GradientBoostingRegressor()
         else:
@@ -69,6 +69,7 @@ class ProjectAgent:
         S, A, R, S2, D = self.train_dataset
         nb_samples = S.shape[0]
         Qfunctions = []
+        residual = []
         SA = np.append(S,A,axis=1)
         for iter in tqdm(range(self.iterations), disable=disable_tqdm):
             if iter==0:
@@ -85,7 +86,11 @@ class ProjectAgent:
             Q.fit(SA, value)
             print(f"Iteration {iter} - MSE loss: {self.evaluate_model(Q):.2f}")
             Qfunctions.append(Q)
+            residual.append(np.mean((Qfunctions[iter].predict(SA) - Qfunctions[iter - 1].predict(SA)) ** 2))
         self.Qfunctions = Qfunctions
+        plt.plot(residual)
+        plt.show()
+        
     
     def evaluate_model(self, Qfunction):
         S, A, R, S2, D = self.test_dataset
