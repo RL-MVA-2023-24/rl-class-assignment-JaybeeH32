@@ -4,6 +4,5 @@ numpy >=1.21.0
 scikit-learn>=1.4.0
 pytest
 numpy
-sckit-learn
+scikit-learn
 matplotlib
-pickle

@@ -91,7 +91,7 @@ class CriticNetwork(torch.nn.Module):
 class ProjectAgent:
     def __init__(self) -> None:
         
-        self.capacity = 1000000
+        self.capacity = 100000
         self.batch_size = 32
         
         self.gamma = 0.99
@@ -99,18 +99,20 @@ class ProjectAgent:
         
         self.actor_lr = 0.0001
         self.critic_lr = 0.0001
-        self.epsilon = 0.1
+        self.epsilon = 1.0
+        self.epsilon_end = 0.01
+        self.epsilon_decay = 0.995        
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        self.num_episodes = 2
+        self.num_episodes = 80
         self.max_steps = 200
         self.actor_update_freq = 2
         
         self.actor_hidden_dims = 64
         self.critic_hidden_dims = 64
-        self.actor_nb_layers = 2
-        self.critic_nb_layers = 2
+        self.actor_nb_layers = 3
+        self.critic_nb_layers = 3
         
 
     def act(self, observation, use_random=False):
@@ -241,10 +243,10 @@ class ProjectAgent:
                     
                     actor_loss_episode += loss_policy.item()
 
-                # Update target networks (soft update)
-                self.update_target_networks(actor_network, target_actor_network, self.tau)
-                self.update_target_networks(critic1_network, target_critic1_network, self.tau)
-                self.update_target_networks(critic2_network, target_critic2_network, self.tau)
+                    # Update target networks (soft update)
+                    self.update_target_networks(actor_network, target_actor_network, self.tau)
+                    self.update_target_networks(critic1_network, target_critic1_network, self.tau)
+                    self.update_target_networks(critic2_network, target_critic2_network, self.tau)
 
                 # if done, print episode info
                 if done or step == self.max_steps - 1:
@@ -261,6 +263,9 @@ class ProjectAgent:
                     break
                 else:
                     action = self.get_action(state, actor_network, self.epsilon)
+            
+            if self.epsilon > self.epsilon_end:
+                self.epsilon *= self.epsilon_decay
         self.actor_network = actor_network
         return cum_reward, actor_loss, critic1_loss, critic2_loss
 
@@ -282,4 +287,4 @@ if __name__ == "__main__":
     ax[1, 0].set_title("Critic 1 Loss")
     ax[1, 1].plot(np.arange(agent.num_episodes), critic2_loss)
     ax[1, 1].set_title("Critic 2 Loss")
-    plt.show()
+    plt.savefig("training.png")
