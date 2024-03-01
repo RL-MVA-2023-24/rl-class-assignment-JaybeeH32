@@ -1,14 +1,36 @@
 from gymnasium.wrappers import TimeLimit
 from env_hiv import HIVPatient
+from evaluate import evaluate_HIV, evaluate_HIV_population
+
+
+import random
+import torch
+from copy import deepcopy
 import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.metrics import mean_squared_error
-from tqdm import tqdm
-import pickle
+import os
+from argparse import ArgumentParser
+import json
+
+class ReplayBuffer:
+    def __init__(self, capacity, device):
+        self.capacity = capacity # capacity of the buffer
+        self.data = []
+        self.index = 0 # index of the next cell to be filled
+        self.device = device
+    def append(self, s, a, r, s_, d):
+        if len(self.data) < self.capacity:
+            self.data.append(None)
+        self.data[self.index] = (s, a, r, s_, d)
+        self.index = (self.index + 1) % self.capacity
+    def sample(self, batch_size):
+        batch = random.sample(self.data, batch_size)
+        return list(map(lambda x:torch.Tensor(np.array(x)).to(self.device), list(zip(*batch))))
+    def __len__(self):
+        return len(self.data)
+
 
 env = TimeLimit(
-    env=HIVPatient(domain_randomization=False), max_episode_steps=200
+    env=HIVPatient(domain_randomization=True), max_episode_steps=200
 )  # The time wrapper limits the number of steps in an episode at 200.
 # Now is the floor is yours to implement the agent and train it.
 
@@ -17,141 +39,72 @@ env = TimeLimit(
 # Don't modify the methods names and signatures, but you can add methods.
 # ENJOY!
 class ProjectAgent:
-    def __init__(self) -> None:
+    def __init__(self):
+        self.state_mean = np.array([360_000, 7_750, 287, 33, 36_808, 55], dtype=np.float32)
+        self.state_std = np.array([128_788, 14_435, 345, 25, 70_083, 32], dtype=np.float32)
         
-        config = {
-        'gamma': 0.99,
-        'iterations': 200,
-        'regressor': 'RF',
-        
-        'collecting_envs': 400,
-        'collecting_horizon': 200,
-        
-        }
-        self.nb_actions = 4
-        self.gamma = config['gamma'] if 'gamma' in config.keys() else 0.99
-        self.iterations = config['iterations'] if 'iterations' in config.keys() else 200
-        self.regressor = config['regressor'] if 'regressor' in config.keys() else 'RF'
-        
-        self.nb_envs = config['collecting_envs'] if 'collecting_envs' in config.keys() else 20
-        self.horizon = config['collecting_horizon'] if 'collecting_horizon' in config.keys() else 200
-    
+        self.reward_mean = 45_344
+        self.reward_std = 33_407
+
     def act(self, observation, use_random=False):
         if use_random:
-            print('playing random !')
-            return np.random.choice(np.arange(self.nb_actions))
-        Q2 = np.zeros((1, self.nb_actions))
-        for a2 in range(self.nb_actions):
-            A2 = np.array([a2]) 
-            S2A2 = np.append(observation, A2, axis=0).reshape(1, -1)
-            Q2[:, a2] = self.Qfunctions[-1].predict(S2A2)
-        max_Q2 = np.argmax(Q2, axis=1)
-        return int(max_Q2)
+            return env.action_space.sample()
+        else:
+            #device = "cuda" if next(self.model.parameters()).is_cuda else "cpu"
+            with torch.no_grad():
+                observation = torch.Tensor(self.normalize_state(observation, self.state_mean, self.state_std)).unsqueeze(0).to(self.device)
+                Qs = [model(observation) for model in self.models]
+                Qs = [weight * q / q.mean() for q, weight in zip(Qs, self.weights)]
+                Q = torch.stack(Qs).mean(0)
+                return torch.argmax(Q).item()
 
     def save(self, path):
-        with open(path, 'wb') as file:
-            pickle.dump(self.Qfunctions[-1], file)
+        self.path = path + "/model_ensemble.pt"
+        torch.save(self.model.state_dict(), self.path)
+        return 
 
     def load(self):
-        with open('agent.pkl', 'rb') as file:
-            Qfunction = pickle.load(file)
-        self.Qfunctions = [Qfunction]
-        
-    def get_regressor(self):
-        if self.regressor == 'RF':
-            return RandomForestRegressor(n_estimators=150)
-        elif self.regressor == 'GB':
-            return GradientBoostingRegressor()
-        else:
-            raise ValueError(f"Type of regressor {self.regressor} is not recognized.")
-    
-    def train(self, disable_tqdm=False):
-        S, A, R, S2, D = self.train_dataset
-        nb_samples = S.shape[0]
-        Qfunctions = []
-        residual = []
-        SA = np.append(S,A,axis=1)
-        for iter in tqdm(range(self.iterations), disable=disable_tqdm):
-            if iter==0:
-                value=R.copy()
-            else:
-                Q2 = np.zeros((nb_samples, self.nb_actions))
-                for a2 in range(self.nb_actions):
-                    A2 = a2 * np.ones((S.shape[0], 1))
-                    S2A2 = np.append(S2, A2, axis=1)
-                    Q2[:, a2] = Qfunctions[-1].predict(S2A2)
-                max_Q2 = np.max(Q2, axis=1)
-                value = R + self.gamma * (1 - D) * max_Q2
-            Q = self.get_regressor()
-            Q.fit(SA, value)
-            print(f"Iteration {iter} - MSE loss: {self.evaluate_model(Q):.2f}")
-            Qfunctions.append(Q)
-            residual.append(np.mean((Qfunctions[iter].predict(SA) - Qfunctions[iter - 1].predict(SA)) ** 2))
-        self.Qfunctions = Qfunctions
-        plt.plot(residual)
-        plt.show()
-        
-    
-    def evaluate_model(self, Qfunction):
-        S, A, R, S2, D = self.test_dataset
-        nb_samples = S.shape[0]
-        SA = np.append(S,A,axis=1)
-        Q2 = np.zeros((nb_samples, self.nb_actions))
-        for a2 in range(self.nb_actions):
-            A2 = a2 * np.ones((S.shape[0], 1))
-            S2A2 = np.append(S2, A2, axis=1)
-            Q2[:, a2] = Qfunction[-1].predict(S2A2)
-        max_Q2 = np.max(Q2, axis=1)
-        value = R + self.gamma * (1 - D) * max_Q2
-        
-        predict_value = Qfunction.predict(SA)
-        return mean_squared_error(value, predict_value)/nb_samples
-        
-    
-    def collect_samples(self, disable_tqdm=False, print_done_states=True):
-        print("Starting to collect samples.")
-        for iter in tqdm(range(self.nb_envs), disable=disable_tqdm):
-            if iter ==0:
-                env = HIVPatient()
-            else:
-                env = HIVPatient(domain_randomization=True)
-            s, _ = env.reset()
-            S = []
-            A = []
-            R = []
-            S2 = []
-            D = []
-            for _ in range(self.horizon):
-                a = env.action_space.sample()
-                s2, r, done, trunc, _ = env.step(a)
-                S.append(s)
-                A.append(a)
-                R.append(r)
-                S2.append(s2)
-                D.append(done)
-                if done or trunc:
-                    s, _ = env.reset()
-                    if done and print_done_states:
-                        print(f"env {iter} done!")
-                else:
-                    s = s2
-        S = np.array(S)
-        A = np.array(A).reshape((-1,1))
-        R = np.array(R)
-        S2= np.array(S2)
-        D = np.array(D)
-        n = len(S)
-        self.train_dataset = (S[:int(n * 0.8)], A[:int(n * 0.8), :], R[:int(n * 0.8)], S2[:int(n * 0.8)], D[:int(n * 0.8)])
-        self.test_dataset = (S[int(n * 0.8):], A[int(n * 0.8):, :], R[int(n * 0.8):], S2[int(n * 0.8):], D[int(n * 0.8):])
+        self.device = torch.device('cpu')
+        self.experiments = ['/model4.pt',
+                            '/model5.pt',
+                            # '/model8.pt',
+                            # '/model9.pt',
+                            # '/model10.pt',
+                            # '/model11.pt',
+                            # '/model12.pt',
+                            ]
+        self.weights = np.ones(len(self.experiments))
+        self.paths = [os.getcwd() + exp for exp in self.experiments]
+        self.models = [self.network(self.device) for exp in self.experiments]
+        for i, model in enumerate(self.models):
+            model.load_state_dict(torch.load(self.paths[i], map_location=self.device))
+            model.eval()
 
-        print("Done collecting samples.")
-
+    def network(self, device):
+        state_dim = 6
+        n_action = 4
+        nb_neurons = 256
+        network = torch.nn.Sequential(torch.nn.Linear(state_dim, nb_neurons),
+                          torch.nn.ReLU(),
+                          torch.nn.Linear(nb_neurons, nb_neurons),
+                          torch.nn.ReLU(), 
+                          torch.nn.Linear(nb_neurons, nb_neurons),
+                          torch.nn.ReLU(), 
+                          torch.nn.Linear(nb_neurons, nb_neurons),
+                          torch.nn.ReLU(), 
+                          torch.nn.Linear(nb_neurons, nb_neurons),
+                          torch.nn.ReLU(),
+                          torch.nn.Linear(nb_neurons, n_action)).to(device)
+        return network
+    
+    def normalize_state(self, state, means, std):
+        out = (state - means) / std
+        return out
+    
+    def normalize_reward(self, reward, mean, std):
+        return (reward - mean) / std
+    
 if __name__ == "__main__":
     
     agent = ProjectAgent()
     
-    agent.collect_samples()
-    
-    agent.train()
-    
-    agent.save("agent.pkl")
